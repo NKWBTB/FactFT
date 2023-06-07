@@ -12,16 +12,21 @@ from sklearn.metrics import balanced_accuracy_score, f1_score
 from scipy.special import expit
 from datasets import Dataset
 from summac.benchmark import SummaCBenchmark
-from peft import get_peft_config, PeftModel, PeftConfig, get_peft_model, LoraConfig, TaskType
+from peft import get_peft_model, LoraConfig, PromptEncoderConfig
 import logging
+import bitsandbytes as bnb
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 
-MODEL_NAME = 'microsoft/deberta-large-mnli'
+MODEL_NAME = 'microsoft/deberta-v2-xlarge-mnli'
+MODEL_NAME = './RedPajama-INCITE-Base-3B-v1'
 DATA_TRAIN = 'factcc'
 REMOVE_COLUMNS = ['filepath', 'id', 'annotations', 'dataset', 'origin']
 FREEZE = False
 LORA = True
+PTUNING = False
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer.pad_token = tokenizer.eos_token
 
 def preprocess_function(examples):
     tokenized_data = tokenizer(examples["document"], 
@@ -48,7 +53,7 @@ class CustomTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.get('logits')
         # compute custom loss
-        loss_fct = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([15/85]).to(CFG.DEVICE))
+        loss_fct = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([15/85]))
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
 
@@ -65,25 +70,33 @@ if __name__ == '__main__':
     test_set = factcc_test.map(preprocess_function,
                                remove_columns=REMOVE_COLUMNS, 
                                batched=True)
+
     model =  AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, 
                                                                 num_labels=1, 
                                                                 problem_type="multi_label_classification",
-                                                                ignore_mismatched_sizes=True)
+                                                                ignore_mismatched_sizes=True,
+                                                                load_in_8bit=True, 
+                                                                device_map='auto',)
+    # torch.save(model.state_dict(), "pytorch_model.bin")
+    # import pdb
+    # pdb.set_trace()
 
     if LORA:
         peft_config = LoraConfig(
-            task_type = TaskType.SEQ_CLS,
+            task_type = "SEQ_CLS",
             r = 8,
             lora_alpha = 8,
             lora_dropout = 0.1,
             inference_mode = False, 
-            target_modules='.*attention\.self.*proj',
-            bias='none'
+            # target_modules='.*attention\.self\.(query_proj|value_proj)',
+            bias='lora_only'
         )
         model = get_peft_model(model, peft_config)
-        model.print_trainable_parameters()
-        import pdb
-        pdb.set_trace()
+    if PTUNING:
+        peft_config = PromptEncoderConfig(task_type="SEQ_CLS", 
+                                          num_virtual_tokens=20, 
+                                          encoder_hidden_size=768)
+        model = get_peft_model(model, peft_config)
 
     trainable_params = 0
     all_param = 0
@@ -105,12 +118,14 @@ if __name__ == '__main__':
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
-    model.to(CFG.DEVICE)
+    # model.to(CFG.DEVICE)
     training_args = TrainingArguments(output_dir="test_trainer", 
                                       evaluation_strategy="epoch",
                                       num_train_epochs=CFG.EPOCH,
                                       learning_rate=CFG.LR,
-                                      per_device_train_batch_size=CFG.BATCH_SIZE)
+                                      lr_scheduler_type='constant',
+                                      per_device_train_batch_size=CFG.BATCH_SIZE,
+                                      fp16=True,)
     trainer = CustomTrainer(
         model=model,
         args=training_args,
