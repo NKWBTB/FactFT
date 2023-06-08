@@ -15,7 +15,6 @@ from summac.benchmark import SummaCBenchmark
 from peft import get_peft_model, LoraConfig, PromptEncoderConfig
 import logging
 import bitsandbytes as bnb
-from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 
 MODEL_NAME = 'microsoft/deberta-v2-xlarge-mnli'
 MODEL_NAME = './RedPajama-INCITE-Base-3B-v1'
@@ -53,7 +52,7 @@ class CustomTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.get('logits')
         # compute custom loss
-        loss_fct = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([15/85]))
+        loss_fct = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([15/85]).to(CFG.DEVICE))
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
 
@@ -76,10 +75,15 @@ if __name__ == '__main__':
                                                                 problem_type="multi_label_classification",
                                                                 ignore_mismatched_sizes=True,
                                                                 load_in_8bit=True, 
-                                                                device_map='auto',)
+                                                                device_map='auto',
+                                                                use_cache=False)
+    model.config.pad_token_id = model.config.eos_token_id
     # torch.save(model.state_dict(), "pytorch_model.bin")
     # import pdb
     # pdb.set_trace()
+
+    model.gradient_checkpointing_enable()  # reduce number of stored activations
+    model.enable_input_require_grads()
 
     if LORA:
         peft_config = LoraConfig(
@@ -114,6 +118,7 @@ if __name__ == '__main__':
         all_param += num_params
         if param.requires_grad:
             trainable_params += num_params
+            param.data = param.data.to(torch.float32)
     print(
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
