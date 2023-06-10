@@ -43,6 +43,10 @@ if __name__ == '__main__':
             dump2jsonl(processed_dataset, dump_to)
 
     # Augment the validation set
+    # import tiktoken
+    # encoding = tiktoken.get_encoding('p50k_base')
+    # encoding = tiktoken.encoding_for_model("text-babbage-001")
+    # max_token_len = 0
     AUG_FOLDER = "augment/"
     cut = 'val'
     benchmark = SummaCBenchmark(benchmark_folder="./summac_benchmark/", cut=cut)
@@ -58,19 +62,25 @@ if __name__ == '__main__':
             doc_sents = sample["doc_sents"]
             sum_sents = sample["sum_sents"]
             rel_index = sample["rel_index"]
+            rel_len = len(rel_index)
+            sents2aug = [doc_sents[idx] for idx in rel_index] + sum_sents
+            aug_sents = aug.rephrase(sents2aug)
             # Augment relevant sentences in document by rephrasing
-            doc_augment_dict = {}
-            for idx in rel_index:
-                sent2aug = doc_sents[idx]
-                # doc_augment_dict[idx] = aug.rephrase(input_sent=sent2aug)
+            doc_augment_dict = {rel_index[i] : aug_sents[i] for i in range(rel_len)}
+            # for idx in rel_index:
+            #     sent2aug = doc_sents[idx]
+            #     max_token_len = max([max_token_len, len(encoding.encode(sent2aug))])
+            #     doc_augment_dict[idx] = aug.rephrase(input_sent=sent2aug)
             
             # Augment summary sentences
-            sum_augment_dict = {}
             sum_len = len(sum_sents)
-            for idx in range(sum_len):
-                sent2aug = sum_sents[idx]
-                # sum_augment_dict[idx] = aug.rephrase(input_sent=sent2aug)
+            sum_augment_dict = {idx : aug_sents[idx+rel_len] for idx in range(sum_len)}
+            # for idx in range(sum_len):
+            #     sent2aug = sum_sents[idx]
+            #     max_token_len = max([max_token_len, len(encoding.encode(sent2aug))])
+            #     sum_augment_dict[idx] = aug.rephrase(input_sent=sent2aug)
 
             sample["doc_augments"] = doc_augment_dict
             sample["sum_augments"] = sum_augment_dict
         dump2jsonl(data, dump_to)
+    # print("max_token_len", max_token_len)
