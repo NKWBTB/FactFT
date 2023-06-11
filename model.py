@@ -11,30 +11,18 @@ from tqdm import tqdm
 from sklearn.metrics import balanced_accuracy_score, f1_score
 from scipy.special import expit
 from datasets import Dataset
-from summac.benchmark import SummaCBenchmark
 from peft import get_peft_model, LoraConfig, PromptEncoderConfig
+from fact_dataset import FactDataset, LoadPolicy, AugmentPolicy
 import logging
-import bitsandbytes as bnb
+# import bitsandbytes as bnb
 
 MODEL_NAME = 'microsoft/deberta-v2-xlarge-mnli'
-MODEL_NAME = './RedPajama-INCITE-Base-3B-v1'
 DATA_TRAIN = 'factcc'
-REMOVE_COLUMNS = ['filepath', 'id', 'annotations', 'dataset', 'origin']
 FREEZE = False
 LORA = True
 PTUNING = False
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-tokenizer.pad_token = tokenizer.eos_token
-
-def preprocess_function(examples):
-    tokenized_data = tokenizer(examples["document"], 
-                     examples["claim"], 
-                     padding="max_length", 
-                     truncation="longest_first")
-    labels = [[label] for label in examples["label"]]
-    tokenized_data["label"] = labels
-    return tokenized_data
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
@@ -46,44 +34,34 @@ def compute_metrics(eval_pred):
     return results
 
 class CustomTrainer(Trainer):
+    def __init__(self, pos_weight, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pos_weight = pos_weight
+    
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.get("labels")
         # forward pass
         outputs = model(**inputs)
         logits = outputs.get('logits')
         # compute custom loss
-        loss_fct = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([15/85]).to(CFG.DEVICE))
+        loss_fct = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([self.pos_weight]).to(CFG.DEVICE))
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
 
 if __name__ == '__main__':
-    benchmark_val = SummaCBenchmark(benchmark_folder="./summac_benchmark/", cut="val")
-    benchmark_test = SummaCBenchmark(benchmark_folder="./summac_benchmark/", cut="test")
-    factcc_val = benchmark_val.get_dataset('factcc')
-    factcc_test = benchmark_test.get_dataset('factcc')
-    factcc_val = Dataset.from_list(factcc_val)
-    factcc_test = Dataset.from_list(factcc_test)
-    train_set = factcc_val.map(preprocess_function, 
-                               remove_columns=REMOVE_COLUMNS,
-                               batched=True)
-    test_set = factcc_test.map(preprocess_function,
-                               remove_columns=REMOVE_COLUMNS, 
-                               batched=True)
+    factdata = FactDataset(tokenizer, LoadPolicy.Train_n_Val_1, AugmentPolicy.NegAugmentOnly)
+    train_set = factdata.load_train('factcc')
+    val_set = factdata.load_val('factcc')
+
+    total_len = len(train_set)
+    num_positive = sum([sample["label"][0] for sample in train_set])
+    pos_weight = (total_len - num_positive) / num_positive
+    print(total_len, num_positive, total_len-num_positive)
 
     model =  AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, 
                                                                 num_labels=1, 
                                                                 problem_type="multi_label_classification",
-                                                                ignore_mismatched_sizes=True,
-                                                                load_in_8bit=True, 
-                                                                device_map='auto',
-                                                                use_cache=False)
-    model.config.pad_token_id = model.config.eos_token_id
-    # torch.save(model.state_dict(), "pytorch_model.bin")
-    # import pdb
-    # pdb.set_trace()
-
-    model.gradient_checkpointing_enable()  # reduce number of stored activations
-    model.enable_input_require_grads()
+                                                                ignore_mismatched_sizes=True,)
 
     if LORA:
         peft_config = LoraConfig(
@@ -92,7 +70,7 @@ if __name__ == '__main__':
             lora_alpha = 8,
             lora_dropout = 0.1,
             inference_mode = False, 
-            # target_modules='.*attention\.self\.(query_proj|value_proj)',
+            target_modules='.*attention\.self\.(query_proj|value_proj)',
             bias='lora_only'
         )
         model = get_peft_model(model, peft_config)
@@ -124,8 +102,12 @@ if __name__ == '__main__':
     )
 
     # model.to(CFG.DEVICE)
-    training_args = TrainingArguments(output_dir="test_trainer", 
+    training_args = TrainingArguments(output_dir=CFG.EXP_PATH, 
                                       evaluation_strategy="epoch",
+                                      save_strategy="epoch",
+                                      save_total_limit=2,
+                                      metric_for_best_model='ba',
+                                      load_best_model_at_end=True,
                                       num_train_epochs=CFG.EPOCH,
                                       learning_rate=CFG.LR,
                                       lr_scheduler_type='constant',
@@ -135,8 +117,15 @@ if __name__ == '__main__':
         model=model,
         args=training_args,
         train_dataset=train_set,
-        eval_dataset=test_set,
+        eval_dataset=val_set,
         compute_metrics=compute_metrics,
+        pos_weight=pos_weight
     )
 
     trainer.train()
+
+    # benchmarking
+    for name in factdata.data_names:
+        print(name)
+        test_set = factdata.load_test(name)
+        trainer.evaluate(test_set)

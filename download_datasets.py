@@ -1,10 +1,12 @@
 from summac.benchmark import SummaCBenchmark
-from utils import dump2jsonl, load_jsonl
+from utils import dump2jsonl, load_jsonl, shift_np
 from tqdm import tqdm
 import preprocess as pre
 import spacy
 import augmentation as aug
 import os
+import numpy as np
+import random
 
 def process_single_sample(sample, nlp):
     _doc = sample["document"]
@@ -19,6 +21,23 @@ def process_single_sample(sample, nlp):
     updated_sample = sample | processed_idx
     return updated_sample
 
+def generate_sample(sample, augment=False, window=2):
+    doc_sents = sample["doc_sents"]
+    sum_sents = sample["sum_sents"]
+    rel_index = sample["rel_index"]
+    coverage = np.zeros(len(doc_sents), dtype=int)
+    for idx in rel_index: coverage[idx] = 1
+    context = coverage.copy()
+    for i in range(-window, window+1):
+        context += shift_np(coverage, i)
+    rel_sents = [doc_sents[i] for i in range(len(doc_sents)) if context[i]]
+    new_sample = {"original_doc": sample["document"], 
+                  "document": " ".join(rel_sents),
+                  "claim": " ".join(sum_sents),
+                  "label": sample["label"],
+                  "augment": augment}
+    return new_sample
+
 if __name__ == '__main__':
     spacy.require_gpu()
     nlp=spacy.load("en_core_web_trf")
@@ -29,7 +48,8 @@ if __name__ == '__main__':
     DATA_FOLDER = 'data/'
     # Process the raw dataset
     RAW_FOLDER = "raw/"
-    for cut in ["val", "test"]:
+    CUTS = ["val", "test"]
+    for cut in CUTS:
         benchmark = SummaCBenchmark(benchmark_folder="./summac_benchmark/", cut=cut)
         for dataset in benchmark.datasets:
             name = dataset["name"]
@@ -49,7 +69,6 @@ if __name__ == '__main__':
     # max_token_len = 0
     AUG_FOLDER = "augment/"
     cut = 'val'
-    benchmark = SummaCBenchmark(benchmark_folder="./summac_benchmark/", cut=cut)
     for name in dataset_names:
         print(name, cut)
         dump_to = os.path.join(DATA_FOLDER, AUG_FOLDER, "_".join([name, cut])+'.jsonl')
@@ -84,3 +103,35 @@ if __name__ == '__main__':
             sample["sum_augments"] = sum_augment_dict
         dump2jsonl(data, dump_to)
     # print("max_token_len", max_token_len)
+
+    # Sample the augmentation & add back to the dataset
+    MERGE_FOLDER = "merge/"
+    AUGMENATION_NUM = 1
+    for cut in CUTS:
+        for name in dataset_names:
+            print(name, cut)
+            dump_to = os.path.join(DATA_FOLDER, MERGE_FOLDER, "_".join([name, cut])+'.jsonl')
+            if os.path.exists(dump_to): 
+                print("skip")
+                continue
+            input_path = os.path.join(DATA_FOLDER, 
+                                      AUG_FOLDER if cut == 'val' else RAW_FOLDER, 
+                                      "_".join([name, cut])+'.jsonl')
+            data = load_jsonl(input_path)
+            merged_data = []
+            for sample in tqdm(data):
+                merged_data.append(generate_sample(sample))
+                if cut == 'val':
+                    doc_sents = sample["doc_sents"]
+                    sum_sents = sample["sum_sents"]
+                    doc_augments = sample["doc_augments"]
+                    sum_augments = sample["sum_augments"]
+                    # Add orignal sentence to the sample pool
+                    for idx, aug_pool in doc_augments.items(): aug_pool.append(doc_sents[int(idx)])
+                    for idx, aug_pool in sum_augments.items(): aug_pool.append(sum_sents[int(idx)])
+                    for _ in range(AUGMENATION_NUM):
+                        # Augment
+                        for idx, aug_pool in doc_augments.items(): doc_sents[int(idx)] = random.choice(aug_pool)
+                        for idx, aug_pool in sum_augments.items(): sum_sents[int(idx)] = random.choice(aug_pool)
+                        merged_data.append(generate_sample(sample, augment=True))
+            dump2jsonl(merged_data, dump_to)
