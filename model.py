@@ -21,6 +21,7 @@ DATA_TRAIN = 'factcc'
 FREEZE = False
 LORA = True
 PTUNING = False
+RESUME = True
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
@@ -122,10 +123,13 @@ if __name__ == '__main__':
         pos_weight=pos_weight
     )
 
-    trainer.train()
+    if RESUME:
+        trainer.train(resume_from_checkpoint=True)
+    else:
+        trainer.train()
 
     # benchmarking
     for name in factdata.data_names:
         print(name)
         test_set = factdata.load_test(name)
-        trainer.evaluate(test_set)
+        print(trainer.evaluate(test_set))
