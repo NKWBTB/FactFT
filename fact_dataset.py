@@ -9,10 +9,30 @@ class LoadPolicy(Enum):
     Train_n_Val_1 = 2
     Train_1_Val_1 = 3
 
+    def __str__(self):
+        return self.name
+    
+    @staticmethod
+    def from_string(s):
+        try:
+            return LoadPolicy[s]
+        except KeyError:
+            raise ValueError()
+
 class AugmentPolicy(Enum):
     NoAugment = 1
     NegAugmentOnly = 2
-    AllAugment = 2
+    AllAugment = 3
+
+    def __str__(self):
+        return self.name
+    
+    @staticmethod
+    def from_string(s):
+        try:
+            return AugmentPolicy[s]
+        except KeyError:
+            raise ValueError()
 
 class FactDataset:
     def __init__(self, tokenizer, load_policy, aug_policy, use_original=False):

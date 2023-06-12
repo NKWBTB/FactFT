@@ -14,16 +14,22 @@ from datasets import Dataset
 from peft import get_peft_model, LoraConfig, PromptEncoderConfig
 from fact_dataset import FactDataset, LoadPolicy, AugmentPolicy
 import logging
+import argparse
 # import bitsandbytes as bnb
 
-MODEL_NAME = 'microsoft/deberta-v2-xlarge-mnli'
-DATA_TRAIN = 'factcc'
-FREEZE = False
-LORA = True
-PTUNING = False
-RESUME = True
+parser = argparse.ArgumentParser()
+parser.add_argument('--output_folder')
+parser.add_argument('--data_name', choices=["cogensumm", "xsumfaith", "polytope", "factcc", "summeval", "frank"])
+parser.add_argument('--lora', default=False, action="store_true")
+parser.add_argument('--ptuning', default=False, action="store_true")
+parser.add_argument('--freeze', default=False, action="store_true")
+parser.add_argument('--resume', default=False, action="store_true")
+parser.add_argument('--load_policy', type=LoadPolicy.from_string, choices=list(LoadPolicy))
+parser.add_argument('--augment_policy', type=AugmentPolicy.from_string, choices=list(AugmentPolicy))
+args = parser.parse_args()
+print(args)
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(CFG.MODEL_NAME)
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
@@ -50,21 +56,21 @@ class CustomTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 if __name__ == '__main__':
-    factdata = FactDataset(tokenizer, LoadPolicy.Train_n_Val_1, AugmentPolicy.NegAugmentOnly)
-    train_set = factdata.load_train('factcc')
-    val_set = factdata.load_val('factcc')
+    factdata = FactDataset(tokenizer, args.load_policy, args.augment_policy)
+    train_set = factdata.load_train(args.data_name)
+    val_set = factdata.load_val(args.data_name)
 
     total_len = len(train_set)
     num_positive = sum([sample["label"][0] for sample in train_set])
     pos_weight = (total_len - num_positive) / num_positive
     print(total_len, num_positive, total_len-num_positive)
 
-    model =  AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, 
+    model =  AutoModelForSequenceClassification.from_pretrained(CFG.MODEL_NAME, 
                                                                 num_labels=1, 
                                                                 problem_type="multi_label_classification",
                                                                 ignore_mismatched_sizes=True,)
 
-    if LORA:
+    if args.lora:
         peft_config = LoraConfig(
             task_type = "SEQ_CLS",
             r = 8,
@@ -75,7 +81,7 @@ if __name__ == '__main__':
             bias='lora_only'
         )
         model = get_peft_model(model, peft_config)
-    if PTUNING:
+    if args.ptuning:
         peft_config = PromptEncoderConfig(task_type="SEQ_CLS", 
                                           num_virtual_tokens=20, 
                                           encoder_hidden_size=768)
@@ -84,7 +90,7 @@ if __name__ == '__main__':
     trainable_params = 0
     all_param = 0
     for name, param in model.named_parameters():
-        if FREEZE:
+        if args.freeze:
             if not name.startswith("deberta.encoder.layer.23.attention.self") \
                 and not name.startswith("classifier"):
                 param.requires_grad = False
@@ -103,7 +109,7 @@ if __name__ == '__main__':
     )
 
     # model.to(CFG.DEVICE)
-    training_args = TrainingArguments(output_dir=CFG.EXP_PATH, 
+    training_args = TrainingArguments(output_dir=args.output_folder, 
                                       evaluation_strategy="epoch",
                                       save_strategy="epoch",
                                       save_total_limit=2,
@@ -123,10 +129,7 @@ if __name__ == '__main__':
         pos_weight=pos_weight
     )
 
-    if RESUME:
-        trainer.train(resume_from_checkpoint=True)
-    else:
-        trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume)
 
     # benchmarking
     for name in factdata.data_names:
