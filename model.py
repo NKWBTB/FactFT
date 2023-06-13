@@ -110,16 +110,19 @@ if __name__ == '__main__':
 
     # model.to(CFG.DEVICE)
     training_args = TrainingArguments(output_dir=args.output_folder, 
-                                      evaluation_strategy="epoch",
-                                      save_strategy="epoch",
+                                      evaluation_strategy="steps",
+                                      save_strategy="steps",
+                                      eval_steps=500,
+                                      save_steps=500,
                                       save_total_limit=2,
                                       metric_for_best_model='ba',
                                       load_best_model_at_end=True,
                                       num_train_epochs=CFG.EPOCH,
+                                      optim="paged_adamw_8bit",
                                       learning_rate=CFG.LR,
-                                      lr_scheduler_type='constant',
+                                    #   lr_scheduler_type='constant',
                                       per_device_train_batch_size=CFG.BATCH_SIZE,
-                                      fp16=True,)
+                                      tf32=True,)
     trainer = CustomTrainer(
         model=model,
         args=training_args,
