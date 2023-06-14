@@ -26,6 +26,7 @@ parser.add_argument('--freeze', default=False, action="store_true")
 parser.add_argument('--resume', default=False, action="store_true")
 parser.add_argument('--load_policy', type=LoadPolicy.from_string, choices=list(LoadPolicy))
 parser.add_argument('--augment_policy', type=AugmentPolicy.from_string, choices=list(AugmentPolicy))
+parser.add_argument('--fold', default=None, type=int, choices=list(range(5)))
 args = parser.parse_args()
 print(args)
 
@@ -57,8 +58,8 @@ class CustomTrainer(Trainer):
 
 if __name__ == '__main__':
     factdata = FactDataset(tokenizer, args.load_policy, args.augment_policy)
-    train_set = factdata.load_train(args.data_name)
-    val_set = factdata.load_val(args.data_name)
+    train_set = factdata.load_train(args.data_name, k=args.fold)
+    val_set = factdata.load_val(args.data_name, k=args.fold)
 
     total_len = len(train_set)
     num_positive = sum([sample["label"][0] for sample in train_set])
