@@ -105,6 +105,7 @@ if __name__ == '__main__':
     # print("max_token_len", max_token_len)
 
     # Sample the augmentation & add back to the dataset
+    CLEAN_FOLDER = "augment_filtered/"
     MERGE_FOLDER = "merge/"
     AUGMENATION_NUM = 1
     for cut in CUTS:
@@ -115,7 +116,7 @@ if __name__ == '__main__':
                 print("skip")
                 continue
             input_path = os.path.join(DATA_FOLDER, 
-                                      AUG_FOLDER if cut == 'val' else RAW_FOLDER, 
+                                      CLEAN_FOLDER if cut == 'val' else RAW_FOLDER, 
                                       "_".join([name, cut])+'.jsonl')
             data = load_jsonl(input_path)
             merged_data = []
