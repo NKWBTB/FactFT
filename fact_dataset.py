@@ -37,7 +37,7 @@ class AugmentPolicy(Enum):
             raise ValueError()
 
 class FactDataset:
-    def __init__(self, tokenizer, load_policy, aug_policy, use_original=False):
+    def __init__(self, tokenizer, load_policy, aug_policy, use_original=True):
         self.data_folder = "data/merge/"
         self.data_names = set(["cogensumm", "xsumfaith", "polytope", "factcc", "summeval", "frank"])
         self.tokenizer = tokenizer
